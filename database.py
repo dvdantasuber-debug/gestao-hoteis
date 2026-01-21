@@ -101,10 +101,9 @@ def init_db():
         )
     ''')
 
-    # Criar Admin padrão (Login: admin / Senha: 123) se a tabela estiver vazia
+    # Criar Admin padrão (admin / 123) se a tabela estiver vazia
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
-        # Senha "123" convertida para SHA-256
         senha_hash = hashlib.sha256('123'.encode()).hexdigest()
         cursor.execute("INSERT INTO usuarios (nome, login, senha, nivel) VALUES (?, ?, ?, ?)",
                        ('Administrador', 'admin', senha_hash, 'Admin'))
