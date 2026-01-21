@@ -7,31 +7,27 @@ def exibir_pagina_cotacoes():
     st.title("💰 Gestão de Cotações e Pedidos")
     conn = init_db()
     
-    # Abas conforme a sua imagem
+    # Restaura as abas conforme sua navegação
     tab1, tab2 = st.tabs(["📄 Nova Cotação", "🔍 Pesquisar e Efetivar Pedidos"])
 
-    # --- ABA 1: NOVA COTAÇÃO ---
     with tab1:
         st.subheader("Gerar Nova Cotação")
-        # Aqui deve ficar a sua lógica existente de criação de novas cotações
+        # Aqui você mantém seu código original de geração de cotações
         st.info("Utilize esta aba para selecionar hotéis e enviar opções iniciais ao cliente.")
 
-    # --- ABA 2: PESQUISAR E EFETIVAR (SISTEMA E PEDIDO) ---
     with tab2:
         st.subheader("🔍 Pesquisar e Enviar")
         
-        # Campo de busca por ID
+        # Campo de busca ID
         id_busca = st.text_input("Buscar ID", placeholder="Ex: COT-20260121-001")
         
-        # Simulação de carregamento de dados do banco de dados
-        # Na prática, aqui você faria um SELECT na sua tabela de cotações salvas
         if id_busca:
             st.write("**Selecione:**")
-            # Seletor da cotação encontrada
+            # Carrega a cotação (substitua pela sua lógica de banco de dados se necessário)
             cotacao_sel = st.selectbox("Cotação:", [id_busca])
             
-            # Tabela de itens da cotação
-            # Estes dados viriam do seu banco de dados baseado no id_busca
+            # Restaurando a visualização da tabela de itens
+            # Na sua versão real, você faz um pd.read_sql_query aqui
             dados_exemplo = {
                 "Hotel": ["TRANSAMERICA COLLECTION GOIANIA"],
                 "Quarto": ["Single"],
@@ -42,31 +38,38 @@ def exibir_pagina_cotacoes():
                 "sistema": [None]
             }
             df_itens = pd.DataFrame(dados_exemplo)
-            st.table(df_itens)
+            st.table(df_itens) # Exibe a tabela conforme sua imagem
             
-            # Botão de PDF e Campo de E-mail
+            # Botões de ação abaixo da tabela
             col_pdf, col_mail = st.columns([1, 1])
-            col_pdf.button("📄 Baixar PDF", use_container_width=True)
-            email_cliente = col_mail.text_input("E-mail:")
+            with col_pdf:
+                st.button("📄 Baixar PDF", use_container_width=True)
+            with col_mail:
+                email_cliente = st.text_input("E-mail:", placeholder="cliente@email.com")
 
             st.divider()
             
-            # SEÇÃO DE VÍNCULO (Onde você efetiva o pedido)
+            # --- PARTE NOVA: VÍNCULO COM SISTEMA E PEDIDO ---
             st.subheader("📌 Efetivar e Vincular ao Sistema")
+            st.markdown("Após o cliente escolher o quarto, preencha os dados abaixo para fechar o pedido.")
+            
             c1, c2, c3 = st.columns([2, 1, 1])
             
-            # Campos para vincular a escolha do cliente ao pedido oficial
-            quarto_final = c1.selectbox("Confirmar Quarto Escolhido", ["Single", "Double", "Triple", "Standard"])
-            sistema_origem = c2.selectbox("Sistema", ["Reserve", "Argo", "Outro"])
-            numero_pedido = c3.text_input("Nº Pedido")
+            # 1. Escolha do quarto que o cliente aprovou
+            quarto_escolhido = c1.selectbox("Quarto Escolhido", df_itens["Quarto"].unique())
+            
+            # 2. Escolha do sistema (Reserve/Argo)
+            sistema = c2.selectbox("Sistema", ["Reserve", "Argo", "Outro"])
+            
+            # 3. Número do pedido gerado no sistema
+            num_pedido = c3.text_input("Nº Pedido")
 
-            if st.button("✅ Confirmar Vínculo e Finalizar", type="primary", use_container_width=True):
-                if numero_pedido and email_cliente:
-                    # Aqui você faria o UPDATE no banco de dados para salvar o sistema e o número do pedido
-                    st.success(f"Sucesso! Cotação {id_busca} vinculada ao {sistema_origem} (Pedido #{numero_pedido}).")
+            if st.button("✅ Confirmar Escolha e Vincular", type="primary", use_container_width=True):
+                if num_pedido and email_cliente:
+                    # Lógica para salvar no banco de dados o fechamento
+                    st.success(f"Cotação {id_busca} finalizada! Quarto: {quarto_escolhido} | {sistema} #{num_pedido}")
                 else:
-                    st.warning("Por favor, preencha o número do pedido e o e-mail para finalizar.")
+                    st.error("Por favor, preencha o E-mail e o Número do Pedido antes de confirmar.")
 
-# Execução principal
 if __name__ == "__main__":
     exibir_pagina_cotacoes()
