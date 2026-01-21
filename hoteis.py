@@ -128,7 +128,7 @@ def exibir_pagina_hoteis():
                 
                 conn.execute("DELETE FROM acomodacoes WHERE hotel_id=?", (h_id,))
                 for ac in st.session_state.form_data['acomodacoes']:
-                    conn.execute("INSERT INTO acomodacoes (hotel_id, tipo, valor, obs) VALUES (?,?,?,?)", (h_id, ac['tipo'], ac['valor'], ac['obs']))
+                    conn.execute("INSERT INTO acomodacoes (hotel_id, tipo, valor, obs) VALUES (?,?,?,?)", (h_id, ac['tipo'], float(ac['valor']), ac['obs']))
                 
                 try:
                     conn.execute("DELETE FROM pix WHERE hotel_id=?", (h_id,))
@@ -159,39 +159,49 @@ def exibir_pagina_hoteis():
                 col_txt.markdown(f"### {h['nome_comercial']}")
                 col_txt.write(f"📍 {h['cidade']} - {h['estado']}")
                 
-                # CORREÇÃO VALUERROR: Verificação de valores nulos ou vazios para a métrica
-                precos = pd.read_sql_query("SELECT valor FROM acomodacoes WHERE hotel_id=?", conn, params=(int(h['id']),))
-                if not precos.empty and precos['valor'].notna().any():
-                    min_p = float(precos['valor'].min())
-                    col_met.metric("Tarifa Inicial", f"R$ {min_p:,.2f}")
+                # --- CORREÇÃO FINAL PARA VALUEERROR ---
+                precos_df = pd.read_sql_query("SELECT valor FROM acomodacoes WHERE hotel_id=?", conn, params=(int(h['id']),))
+                
+                if not precos_df.empty:
+                    # Força a coluna a ser numérica, transformando erros em NaN
+                    precos_df['valor'] = pd.to_numeric(precos_df['valor'], errors='coerce')
+                    # Remove os NaN (valores inválidos ou nulos)
+                    precos_validos = precos_df['valor'].dropna()
+                    
+                    if not precos_validos.empty:
+                        min_p = float(precos_validos.min())
+                        col_met.metric("Tarifa Inicial", f"R$ {min_p:,.2f}")
+                    else:
+                        col_met.info("Sem tarifas")
                 else:
                     col_met.info("Sem tarifas")
                 
                 if col_btn.button("Ver Detalhes", key=f"btn_{h['id']}"):
                     st.session_state.hotel_detalhe = h['id']
+                    st.rerun()
             
         if 'hotel_detalhe' in st.session_state:
             h_id = st.session_state.hotel_detalhe
-            h = pd.read_sql_query("SELECT * FROM hoteis WHERE id=?", conn, params=(int(h_id),)).iloc[0]
-            st.divider()
-            if st.button("⬅️ Fechar Detalhes"): st.session_state.pop('hotel_detalhe'); st.rerun()
-            
-            st.subheader(f"🏨 {h['nome_comercial']}")
-            st.write(f"**Razão:** {h['razao_social']} | **CNPJ:** {h['cnpj']}")
-            st.write(f"**Endereço:** {h['logradouro']}, {h['numero']} - {h['cep']}")
-            
-            # Tarifas Detalhadas
-            st.markdown("#### 💳 Tarifário")
-            res_ac = pd.read_sql_query("SELECT tipo, valor, obs FROM acomodacoes WHERE hotel_id=?", conn, params=(int(h_id),))
-            st.dataframe(res_ac, hide_index=True, use_container_width=True)
+            h_res = pd.read_sql_query("SELECT * FROM hoteis WHERE id=?", conn, params=(int(h_id),))
+            if not h_res.empty:
+                h = h_res.iloc[0]
+                st.divider()
+                if st.button("⬅️ Fechar Detalhes"): st.session_state.pop('hotel_detalhe'); st.rerun()
+                
+                st.subheader(f"🏨 {h['nome_comercial']}")
+                st.write(f"**Razão:** {h['razao_social']} | **CNPJ:** {h['cnpj']}")
+                st.write(f"**Endereço:** {h['logradouro']}, {h['numero']} - {h['cep']}")
+                
+                st.markdown("#### 💳 Tarifário")
+                res_ac = pd.read_sql_query("SELECT tipo, valor, obs FROM acomodacoes WHERE hotel_id=?", conn, params=(int(h_id),))
+                st.dataframe(res_ac, hide_index=True, use_container_width=True)
 
-            # Mapa
-            if h['latitude'] and h['longitude']:
-                try:
-                    st.markdown("#### 🗺️ Localização")
-                    map_df = pd.DataFrame({'lat': [float(h['latitude'])], 'lon': [float(h['longitude'])]})
-                    st.map(map_df)
-                except: st.warning("Coordenadas inválidas.")
+                if h['latitude'] and h['longitude']:
+                    try:
+                        st.markdown("#### 🗺️ Localização")
+                        map_df = pd.DataFrame({'lat': [float(h['latitude'])], 'lon': [float(h['longitude'])]})
+                        st.map(map_df)
+                    except: st.warning("Coordenadas inválidas.")
 
 if __name__ == "__main__":
     exibir_pagina_hoteis()
