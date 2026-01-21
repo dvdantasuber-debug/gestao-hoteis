@@ -7,7 +7,6 @@ from email.mime.multipart import MIMEMultipart
 from database import init_db
 from utils import get_countries, get_states, get_cities
 
-# --- FUNÇÃO DE ENVIO DE E-MAIL ---
 def enviar_email_cotacao(destinatario, assunto, corpo):
     try:
         msg = MIMEMultipart()
@@ -22,7 +21,7 @@ def enviar_email_cotacao(destinatario, assunto, corpo):
         server.quit()
         return True
     except Exception as e:
-        st.error(f"Erro ao enviar e-mail: {e}")
+        st.error(f"Erro no e-mail: {e}")
         return False
 
 def exibir_pagina_hoteis():
@@ -32,11 +31,9 @@ def exibir_pagina_hoteis():
     if 'id_edicao' not in st.session_state: st.session_state.id_edicao = None
     if 'form_data' not in st.session_state: st.session_state.form_data = {'acomodacoes': [], 'pix': []}
 
-    tab_cad, tab_cons = st.tabs(["📝 Cadastro e Edição", "🔍 Consulta e Vínculo (Reserve/Argo)"])
+    tab_cad, tab_cons = st.tabs(["📝 Cadastro e Edição", "🔍 Gerar Cotação e Vínculo"])
 
-    # ==========================================
-    # --- ABA 1: CADASTRO E EDIÇÃO ---
-    # ==========================================
+    # --- ABA 1: CADASTRO COMPLETO ---
     with tab_cad:
         hoteis_db = pd.read_sql_query("SELECT id, nome_comercial FROM hoteis ORDER BY nome_comercial", conn)
         with st.expander("🛠️ Localizar Hotel para Editar", expanded=not st.session_state.id_edicao):
@@ -71,11 +68,11 @@ def exibir_pagina_hoteis():
         p_lista = get_countries()
         pais = l1.selectbox("País", p_lista, index=p_lista.index("Brazil") if "Brazil" in p_lista else 0)
         e_lista = get_states(pais)
-        est_default = e_lista.index("Goiás") if "Goiás" in e_lista else 0
-        estado = l2.selectbox("Estado", e_lista, index=e_lista.index(st.session_state.form_data.get('estado')) if st.session_state.form_data.get('estado') in e_lista else est_default)
+        est_idx = e_lista.index("Goiás") if "Goiás" in e_lista else 0
+        estado = l2.selectbox("Estado", e_lista, index=e_lista.index(st.session_state.form_data.get('estado')) if st.session_state.form_data.get('estado') in e_lista else est_idx)
         c_lista = get_cities(pais, estado)
-        cid_default = c_lista.index("Goiânia") if "Goiânia" in c_lista else 0
-        cidade = l3.selectbox("Cidade", c_lista, index=c_lista.index(st.session_state.form_data.get('cidade')) if st.session_state.form_data.get('cidade') in c_lista else cid_default)
+        cid_idx = c_lista.index("Goiânia") if "Goiânia" in c_lista else 0
+        cidade = l3.selectbox("Cidade", c_lista, index=c_lista.index(st.session_state.form_data.get('cidade')) if st.session_state.form_data.get('cidade') in c_lista else cid_idx)
 
         with st.expander("Endereço Completo e Coordenadas", expanded=True):
             ed1, ed2, ed3 = st.columns([1.5, 3, 1])
@@ -101,8 +98,7 @@ def exibir_pagina_hoteis():
         st.subheader("💳 Tarifário")
         with st.expander("Configurar Tarifas", expanded=True):
             a1, a2, a3, a4 = st.columns([2, 1, 2, 0.5])
-            t_opcoes = ["Single", "Double", "Triple", "Suíte Luxo", "Standard"]
-            tipo_ac = a1.selectbox("Tipo de Quarto", t_opcoes)
+            tipo_ac = a1.selectbox("Tipo de Quarto", ["Single", "Double", "Triple", "Suíte Luxo", "Standard"])
             valor_ac = a2.text_input("Valor (R$)", placeholder="0,00")
             obs_ac = a3.text_input("Observações")
             if a4.button("➕"):
@@ -116,15 +112,12 @@ def exibir_pagina_hoteis():
         if st.button("💾 SALVAR HOTEL", use_container_width=True, type="primary"):
             if nome_com:
                 cursor = conn.cursor()
-                campos = (nome_com, razao, cnpj, cidade, estado, pais, cep, logr, num, lat, lon)
+                vals = (nome_com, razao, cnpj, cidade, estado, pais, cep, logr, num, lat, lon)
                 if st.session_state.id_edicao:
-                    cursor.execute("""UPDATE hoteis SET nome_comercial=?, razao_social=?, cnpj=?, cidade=?, estado=?, 
-                                    pais=?, cep=?, logradouro=?, numero=?, latitude=?, longitude=? WHERE id=?""", 
-                                    campos + (st.session_state.id_edicao,))
+                    cursor.execute("UPDATE hoteis SET nome_comercial=?, razao_social=?, cnpj=?, cidade=?, estado=?, pais=?, cep=?, logradouro=?, numero=?, latitude=?, longitude=? WHERE id=?", vals + (st.session_state.id_edicao,))
                     h_id = st.session_state.id_edicao
                 else:
-                    cursor.execute("""INSERT INTO hoteis (nome_comercial, razao_social, cnpj, cidade, estado, pais, 
-                                    cep, logradouro, numero, latitude, longitude) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", campos)
+                    cursor.execute("INSERT INTO hoteis (nome_comercial, razao_social, cnpj, cidade, estado, pais, cep, logradouro, numero, latitude, longitude) VALUES (?,?,?,?,?,?,?,?,?,?,?)", vals)
                     h_id = cursor.lastrowid
                 
                 conn.execute("DELETE FROM acomodacoes WHERE hotel_id=?", (h_id,))
@@ -137,28 +130,19 @@ def exibir_pagina_hoteis():
                     conn.execute("INSERT INTO pix (hotel_id, tipo, chave) VALUES (?,?,?)", (h_id, px['tipo'], px['chave']))
                 
                 conn.commit()
-                st.success("Salvo com sucesso!")
-                time.sleep(1)
-                st.session_state.id_edicao = None
-                st.rerun()
+                st.success("Hotel Salvo!"); time.sleep(1); st.session_state.id_edicao = None; st.rerun()
 
-    # ==========================================
-    # --- ABA 2: CONSULTA E VÍNCULO ---
-    # ==========================================
+    # --- ABA 2: CONSULTA E COTAÇÃO VINCULADA ---
     with tab_cons:
-        st.subheader("🔗 Vincular Cotação")
-        c_sis1, c_sis2 = st.columns(2)
-        sistema = c_sis1.selectbox("Sistema", ["Reserve", "Argo", "Outro"])
-        pedido = c_sis2.text_input("ID do Pedido")
-
-        busca = st.text_input("🔍 Buscar Hotel:")
+        st.subheader("🔍 Selecione o Hotel para Cotação")
+        busca = st.text_input("Filtrar por nome:")
         hoteis = pd.read_sql_query(f"SELECT * FROM hoteis WHERE nome_comercial LIKE '%{busca}%'", conn)
         
         for _, h in hoteis.iterrows():
             with st.container(border=True):
-                col_i, col_b = st.columns([4, 1])
-                col_i.write(f"### {h['nome_comercial']}\n📍 {h['cidade']} - {h['estado']}")
-                if col_b.button("Selecionar", key=f"sel_{h['id']}"):
+                c_i, c_b = st.columns([4, 1])
+                c_i.write(f"### {h['nome_comercial']}\n📍 {h['cidade']} - {h['estado']}")
+                if c_b.button("Selecionar", key=f"q_{h['id']}"):
                     st.session_state.hotel_detalhe = h['id']
                     st.rerun()
 
@@ -167,24 +151,44 @@ def exibir_pagina_hoteis():
             h = pd.read_sql_query("SELECT * FROM hoteis WHERE id=?", conn, params=(h_id_det,)).iloc[0]
             st.divider()
             
-            # OPÇÃO DE EXCLUSÃO
-            cv, ce = st.columns([4, 1])
-            if cv.button("⬅️ Fechar"): st.session_state.pop('hotel_detalhe'); st.rerun()
-            if ce.button("🗑️ EXCLUIR HOTEL", type="secondary"):
-                conn.execute("DELETE FROM acomodacoes WHERE hotel_id=?", (h_id_det,))
-                conn.execute("DELETE FROM pix WHERE hotel_id=?", (h_id_det,))
-                conn.execute("DELETE FROM hoteis WHERE id=?", (h_id_det,))
-                conn.commit()
+            # Cabeçalho da Cotação
+            col_v, col_e = st.columns([4, 1])
+            if col_v.button("⬅️ Voltar"): st.session_state.pop('hotel_detalhe'); st.rerun()
+            if col_e.button("🗑️ EXCLUIR HOTEL", type="secondary"):
+                conn.execute("DELETE FROM hoteis WHERE id=?", (h_id_det,)); conn.commit()
                 st.success("Removido!"); time.sleep(1); st.session_state.pop('hotel_detalhe'); st.rerun()
 
-            st.subheader(f"🏨 {h['nome_comercial']}")
-            df_det = pd.read_sql_query("SELECT tipo, valor, obs FROM acomodacoes WHERE hotel_id=?", conn, params=(h_id_det,))
-            if not df_det.empty:
-                st.table(df_det)
-                email_p = st.text_input("E-mail do Passageiro")
-                if st.button("🚀 Enviar Proposta Vinculada"):
-                    if email_p and pedido:
-                        corpo = f"<h2>Cotação Pedido #{pedido} ({sistema})</h2><p>Hotel: {h['nome_comercial']}</p>"
-                        if enviar_email_cotacao(email_p, f"Cotação #{pedido}", corpo):
-                            st.success("Enviado!")
-                    else: st.warning("Informe o Pedido e o E-mail.")
+            st.subheader(f"📋 Gerar Cotação: {h['nome_comercial']}")
+            
+            # Dados do Vínculo (Pedido)
+            st.info("Preencha os dados do pedido para vincular à cotação enviada.")
+            c_sis, c_ped = st.columns(2)
+            sistema = c_sis.selectbox("Sistema de Destino", ["Reserve", "Argo", "Outro"])
+            pedido_id = c_ped.text_input("ID do Pedido (Ex: 123456)")
+            
+            # Exibição de Opções de Quarto
+            df_ac = pd.read_sql_query("SELECT tipo, valor, obs FROM acomodacoes WHERE hotel_id=?", conn, params=(h_id_det,))
+            if not df_ac.empty:
+                st.table(df_ac)
+                
+                # Envio da Cotação
+                email_cli = st.text_input("E-mail do Passageiro / Solicitante")
+                if st.button("🚀 Enviar Cotação Vinculada"):
+                    if email_cli and pedido_id:
+                        corpo_html = f"""
+                        <h3>Cotação de Hospedagem - Pedido #{pedido_id}</h3>
+                        <p><b>Sistema:</b> {sistema}</p>
+                        <hr>
+                        <p>Olá, seguem as opções para o hotel <b>{h['nome_comercial']}</b>:</p>
+                        <table border='1' style='border-collapse: collapse;'>
+                            <tr><th>Quarto</th><th>Valor</th><th>Obs</th></tr>
+                            {"".join([f"<tr><td>{r['tipo']}</td><td>R$ {r['valor']:,.2f}</td><td>{r['obs']}</td></tr>" for _, r in df_ac.iterrows()])}
+                        </table>
+                        <p>Para confirmar, basta responder este e-mail informando a opção desejada.</p>
+                        """
+                        if enviar_email_cotacao(email_cli, f"Cotação Pedido #{pedido_id} - {h['nome_comercial']}", corpo_html):
+                            st.success(f"Cotação enviada com sucesso! Vínculo: {sistema} #{pedido_id}")
+                    else:
+                        st.warning("Informe o ID do Pedido e o E-mail para prosseguir.")
+            else:
+                st.warning("Este hotel não possui tarifas cadastradas.")
