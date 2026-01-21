@@ -72,10 +72,10 @@ def gerar_pdf_cotacao(cotacao_info, itens_df):
     return bytes(pdf.output())
 
 def enviar_email_html(destinatario, cotacao_id, inf, itens_df):
-    USER = os.getenv("EMAIL_USER").strip()
-    PASS = "".join(os.getenv("EMAIL_PASS").split()).replace('"', '').replace("'", "")
-    HOST = os.getenv("EMAIL_HOST").strip()
-    PORT = int(os.getenv("EMAIL_PORT", 587))
+    USER = st.secrets["EMAIL_USER"]
+    PASS = st.secrets["EMAIL_PASS"]
+    HOST = st.secrets["EMAIL_HOST"]
+    PORT = int(st.secrets["EMAIL_PORT"])
     image_cid = make_msgid()
 
     total_proposta = 0
@@ -96,7 +96,6 @@ def enviar_email_html(destinatario, cotacao_id, inf, itens_df):
 
     corpo_html = f"""<html><body style="font-family: Arial;"><div style="max-width: 700px; margin: auto; border: 1px solid #ddd;">
         <div style="background: {AZUL_UNIGLOBE_HEX}; color: white; padding: 20px; text-align: center;">
-            <img src="cid:{image_cid[1:-1]}" style="max-height: 50px;"><br>
             <h2>PROPOSTA DE HOSPEDAGEM</h2><small>ID: {cotacao_id}</small>
         </div>
         <div style="padding: 20px;">
@@ -114,10 +113,6 @@ def enviar_email_html(destinatario, cotacao_id, inf, itens_df):
         msg = EmailMessage()
         msg['Subject'] = f"Proposta Uniglobe - {cotacao_id}"; msg['From'] = USER; msg['To'] = destinatario
         msg.add_alternative(corpo_html, subtype='html')
-        if os.path.exists("logo.png"):
-            with open("logo.png", "rb") as img: msg.get_payload()[0].add_related(img.read(), 'image', 'png', cid=image_cid)
-        
-        # AJUSTE SSL: SMTP + STARTTLS (Porta 587)
         server = smtplib.SMTP(HOST, PORT)
         server.starttls()
         server.login(USER, PASS)
@@ -147,16 +142,21 @@ def exibir_pagina_cotacoes():
             evento = c3.text_input("Evento")
             
             l1, l2, l3 = st.columns(3)
-            pais = l1.selectbox("País", get_countries())
-            est = l2.selectbox("Estado", get_states(pais))
-            cid = l3.selectbox("Cidade", get_cities(pais, est))
+            p_lista = get_countries()
+            pais = l1.selectbox("País", p_lista, index=p_lista.index("Brazil") if "Brazil" in p_lista else 0)
+            e_lista = get_states(pais)
+            est_idx = e_lista.index("Goiás") if "Goiás" in e_lista else 0
+            estado = l2.selectbox("Estado", e_lista, index=est_idx)
+            c_lista = get_cities(pais, estado)
+            cid_idx = c_lista.index("Goiânia") if "Goiânia" in c_lista else 0
+            cidade = l3.selectbox("Cidade", c_lista, index=cid_idx)
             
             d1, d2 = st.columns(2)
             checkin = d1.date_input("Check-in", datetime.date.today())
             checkout = d2.date_input("Check-out", datetime.date.today() + datetime.timedelta(days=1))
             diarias = (checkout - checkin).days or 1
 
-        hoteis = pd.read_sql_query("SELECT * FROM hoteis WHERE cidade = ?", conn, params=(cid,))
+        hoteis = pd.read_sql_query("SELECT * FROM hoteis WHERE cidade = ?", conn, params=(cidade,))
         for _, h in hoteis.iterrows():
             with st.expander(f"🏨 {h['nome_comercial']}"):
                 quartos = pd.read_sql_query("SELECT * FROM acomodacoes WHERE hotel_id = ?", conn, params=(h['id'],))
@@ -177,13 +177,12 @@ def exibir_pagina_cotacoes():
             st.subheader("🛒 Itens Selecionados")
             df_c = pd.DataFrame(st.session_state.carrinho)
             df_c['Subtotal'] = df_c['valor'] * df_c['quantidade'] * df_c['diarias']
-            st.dataframe(df_c[["Hotel", "Quarto", "valor", "quantidade", "diarias", "Subtotal"]].style.format({'valor': 'R$ {:,.2f}', 'Subtotal': 'R$ {:,.2f}'})
-                         .set_properties(**{'background-color': AZUL_CLARO_HEX}, subset=pd.IndexSlice[df_c.index[::2], :]), use_container_width=True)
+            st.dataframe(df_c[["Hotel", "Quarto", "valor", "quantidade", "diarias", "Subtotal"]], use_container_width=True)
             
             if st.button("💾 Salvar Cotação", type="primary"):
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO cotacoes (identificador, grupo, empresa, evento, checkin, checkout, cidade, estado) VALUES (?,?,?,?,?,?,?,?)",
-                             (identificador, g_sel, e_sel, evento, str(checkin), str(checkout), cid, est))
+                             (identificador, g_sel, e_sel, evento, str(checkin), str(checkout), cidade, estado))
                 c_id = cursor.lastrowid
                 for item in st.session_state.carrinho:
                     cursor.execute("INSERT INTO cotacao_hoteis (cotacao_id, hotel_id, quarto_tipo, valor, quantidade) VALUES (?,?,?,?,?)",
@@ -191,7 +190,7 @@ def exibir_pagina_cotacoes():
                 conn.commit(); st.session_state.carrinho = []; st.success("Salvo!"); st.rerun()
 
     with tab2:
-        st.subheader("🔍 Pesquisar e Enviar")
+        st.subheader("🔍 Pesquisar e Efetivar Pedidos")
         busca = st.text_input("Buscar ID")
         df_h = pd.read_sql_query("SELECT * FROM cotacoes WHERE identificador LIKE ?", conn, params=(f"%{busca}%",))
         if not df_h.empty:
@@ -201,21 +200,35 @@ def exibir_pagina_cotacoes():
                 SELECT ch.id, h.nome_comercial as Hotel, ch.quarto_tipo as Quarto, ch.valor, ch.quantidade, ch.pedido, ch.sistema, ac.obs 
                 FROM cotacao_hoteis ch 
                 JOIN hoteis h ON ch.hotel_id = h.id 
-                LEFT JOIN acomodacoes ac ON h.id = ac.hotel_id AND ch.quarto_tipo = ac.tipo 
+                LEFT JOIN acomodacoes ac ON (h.id = ac.hotel_id AND ch.quarto_tipo = ac.tipo) 
                 WHERE ch.cotacao_id = ?""", conn, params=(int(inf['id']),))
             
-            d_i, d_o = datetime.datetime.strptime(inf['checkin'], '%Y-%m-%d'), datetime.datetime.strptime(inf['checkout'], '%Y-%m-%d')
-            itens['diarias'] = (d_o - d_i).days or 1
+            st.dataframe(itens[["Hotel", "Quarto", "obs", "valor", "quantidade", "pedido", "sistema"]], use_container_width=True)
             
-            st.dataframe(itens[["Hotel", "Quarto", "obs", "valor", "quantidade", "pedido", "sistema"]].style.set_properties(**{'background-color': AZUL_CLARO_HEX}, subset=pd.IndexSlice[itens.index[::2], :]), use_container_width=True)
+            st.divider()
+            st.subheader("🔗 Vincular ao Pedido do Sistema")
+            c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
+            escolha = c_f1.selectbox("Quarto Escolhido", itens['Hotel'] + " - " + itens['Quarto'])
+            sistema = c_f2.selectbox("Sistema", ["Reserve", "Argo", "Outro"])
+            pedido = c_f3.text_input("Nº Pedido")
             
+            if st.button("✅ Finalizar Pedido", type="primary"):
+                if pedido:
+                    idx_item = (itens['Hotel'] + " - " + itens['Quarto']).tolist().index(escolha)
+                    id_db = int(itens.iloc[idx_item]['id'])
+                    conn.execute("UPDATE cotacao_hoteis SET pedido=?, sistema=? WHERE id=?", (pedido, sistema, id_db))
+                    conn.commit()
+                    st.success("Vínculo realizado!"); st.rerun()
+
+            st.divider()
             emp_info = pd.read_sql_query("SELECT email FROM empresas_clientes WHERE nome = ?", conn, params=(inf['empresa'],))
             mail_sugerido = emp_info['email'].iloc[0] if not emp_info.empty else ""
-            
             c1, c2 = st.columns(2)
+            d_i, d_o = datetime.datetime.strptime(inf['checkin'], '%Y-%m-%d'), datetime.datetime.strptime(inf['checkout'], '%Y-%m-%d')
+            itens['diarias'] = (d_o - d_i).days or 1
             pdf_bytes = gerar_pdf_cotacao(inf, itens)
             c1.download_button("📄 Baixar PDF", pdf_bytes, f"{sel}.pdf", use_container_width=True)
             dest = c2.text_input("E-mail:", value=mail_sugerido)
-            if c2.button("📧 Enviar por E-mail", type="primary", use_container_width=True):
+            if c2.button("📧 Enviar por E-mail", use_container_width=True):
                 ok, msg = enviar_email_html(dest, sel, inf, itens)
                 st.success(msg) if ok else st.error(msg)
