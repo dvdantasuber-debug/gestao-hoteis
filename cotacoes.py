@@ -4,11 +4,12 @@ import datetime
 import os
 import smtplib
 from email.message import EmailMessage
+from email.utils import make_msgid
 from database import init_db
 from utils import get_countries, get_states, get_cities
 from fpdf import FPDF
 
-# --- CONFIGURAÇÕES VISUAIS UNIGLOBE ---
+# --- CORES E CONFIGURAÇÕES UNIGLOBE ---
 AZUL_UNIGLOBE_RGB = (25, 45, 95)
 AZUL_UNIGLOBE_HEX = "#192d5f"
 AZUL_CLARO_HEX = "#E8EDF6"
@@ -16,7 +17,7 @@ AZUL_CLARO_HEX = "#E8EDF6"
 def gerar_identificador_unico(conn):
     hoje = datetime.date.today().strftime("%Y%m%d")
     cursor = conn.cursor()
-    # Sintaxe PostgreSQL usa %s para parâmetros
+    # No PostgreSQL usamos %s em vez de ?
     cursor.execute("SELECT identificador FROM cotacoes WHERE identificador LIKE %s ORDER BY identificador DESC LIMIT 1", (f"COT-{hoje}-%",))
     ultimo = cursor.fetchone()
     novo_num = int(ultimo[0].split('-')[-1]) + 1 if ultimo else 1
@@ -36,8 +37,11 @@ def gerar_pdf_cotacao(cotacao_info, itens_df):
     pdf.set_x(110); pdf.cell(90, 5, f"ID: {cotacao_info['identificador']}", align='R', ln=True)
     
     pdf.set_xy(10, 55); pdf.set_text_color(30, 30, 30)
-    pdf.set_font("Helvetica", "B", 11); pdf.cell(0, 10, f"Evento: {str(cotacao_info['evento']).upper()}", ln=True)
+    # Convertendo para string para evitar erros de tipo
+    evento_nome = str(cotacao_info['evento']).upper()
+    pdf.set_font("Helvetica", "B", 11); pdf.cell(0, 10, f"Evento: {evento_nome}", ln=True)
 
+    # Tabela do PDF
     w_hotel, w_val, w_qtd, w_sub = 105, 30, 15, 40
     pdf.set_fill_color(*AZUL_UNIGLOBE_RGB); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 9)
@@ -82,7 +86,7 @@ def enviar_email_html(destinatario, cotacao_id, inf, itens_df):
             total_proposta += sub
             linhas_tabela += f"<tr style='background:{cor_fundo};'><td><b>{row['Hotel']}</b></td><td align='center'>R$ {row['valor']:,.2f}</td><td align='center'>{row['quantidade']}</td><td align='right'>R$ {sub:,.2f}</td></tr>"
 
-        corpo = f"<html><body><div style='background:{AZUL_UNIGLOBE_HEX};color:white;padding:20px;'><h2>PROPOSTA {cotacao_id}</h2></div><p>Evento: {inf['evento']}</p><table width='100%'>{linhas_tabela}</table><h3>Total: R$ {total_proposta:,.2f}</h3></body></html>"
+        corpo = f"<html><body><div style='background:{AZUL_UNIGLOBE_HEX};color:white;padding:20px;'><h2>PROPOSTA {cotacao_id}</h2></div><table width='100%'>{linhas_tabela}</table><h3>Total: R$ {total_proposta:,.2f}</h3></body></html>"
 
         msg = EmailMessage()
         msg['Subject'] = f"Proposta Uniglobe - {cotacao_id}"
@@ -108,7 +112,7 @@ def exibir_pagina_cotacoes():
         identificador = gerar_identificador_unico(conn)
         with st.container(border=True):
             c1, c2, c3 = st.columns(3)
-            grupos = pd.read_sql_query("SELECT id, nome FROM grupos_economicos ORDER BY nome", conn)
+            grupos = pd.read_sql_query("SELECT id, nome FROM grupos_economicos", conn)
             g_sel = c1.selectbox("Grupo", [""] + grupos['nome'].tolist())
             empresas = [""]
             if g_sel:
@@ -120,8 +124,8 @@ def exibir_pagina_cotacoes():
             l1, l2, l3 = st.columns(3)
             p_lista = get_countries()
             pais = l1.selectbox("País", p_lista, index=p_lista.index("Brazil") if "Brazil" in p_lista else 0)
-            est = l2.selectbox("Estado", get_states(pais), index=0)
-            cid = l3.selectbox("Cidade", get_cities(pais, est), index=0)
+            est = l2.selectbox("Estado", get_states(pais))
+            cid = l3.selectbox("Cidade", get_cities(pais, est))
             
             d1, d2 = st.columns(2)
             checkin = d1.date_input("Check-in", datetime.date.today())
@@ -143,48 +147,60 @@ def exibir_pagina_cotacoes():
         if st.session_state.carrinho:
             st.divider()
             df_c = pd.DataFrame(st.session_state.carrinho)
-            st.dataframe(df_c[["Hotel", "Quarto", "valor", "quantidade", "diarias"]], use_container_width=True)
+            st.dataframe(df_c, use_container_width=True)
             if st.button("💾 Salvar Cotação", type="primary"):
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO cotacoes (identificador, grupo, empresa, evento, checkin, checkout, cidade, estado) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id", (identificador, g_sel, e_sel, evento, checkin, checkout, cid, est))
+                # RETURNING id é o jeito certo no PostgreSQL
+                cursor.execute("""
+                    INSERT INTO cotacoes (identificador, grupo, empresa, evento, checkin, checkout, cidade, estado) 
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""", 
+                    (identificador, g_sel, e_sel, evento, checkin, checkout, cid, est))
                 c_id = cursor.fetchone()[0]
                 for item in st.session_state.carrinho:
-                    cursor.execute("INSERT INTO cotacao_hoteis (cotacao_id, hotel_id, quarto_tipo, valor, quantidade) VALUES (%s,%s,%s,%s,%s)", (c_id, item['Hotel_ID'], item['Quarto'], item['valor'], item['quantidade']))
+                    cursor.execute("""
+                        INSERT INTO cotacao_hoteis (cotacao_id, hotel_id, quarto_tipo, valor, quantidade) 
+                        VALUES (%s,%s,%s,%s,%s)""", 
+                        (c_id, item['Hotel_ID'], item['Quarto'], item['valor'], item['quantidade']))
                 conn.commit(); st.session_state.carrinho = []; st.success("Salvo!"); st.rerun()
 
     with tab2:
         st.subheader("🔍 Pesquisar e Efetivar")
-        busca = st.text_input("Buscar ID (Ex: COT-2026)")
-        # ILIKE para busca case-insensitive no PostgreSQL
+        busca = st.text_input("Buscar ID")
+        # ILIKE ignora maiúsculas/minúsculas no PostgreSQL
         df_h = pd.read_sql_query("SELECT * FROM cotacoes WHERE identificador ILIKE %s", conn, params=(f"%{busca}%",))
         if not df_h.empty:
             sel = st.selectbox("Selecione:", df_h['identificador'])
             inf = df_h[df_h['identificador'] == sel].iloc[0]
-            itens = pd.read_sql_query("SELECT ch.id, h.nome_comercial as Hotel, ch.quarto_tipo as Quarto, ch.valor, ch.quantidade, ch.pedido, ch.sistema, ac.obs FROM cotacao_hoteis ch JOIN hoteis h ON ch.hotel_id = h.id LEFT JOIN acomodacoes ac ON (h.id = ac.hotel_id AND ch.quarto_tipo = ac.tipo) WHERE ch.cotacao_id = %s", conn, params=(int(inf['id']),))
+            itens = pd.read_sql_query("""
+                SELECT ch.id, h.nome_comercial as Hotel, ch.quarto_tipo as Quarto, ch.valor, ch.quantidade, ch.pedido, ch.sistema, ac.obs 
+                FROM cotacao_hoteis ch 
+                JOIN hoteis h ON ch.hotel_id = h.id 
+                LEFT JOIN acomodacoes ac ON (h.id = ac.hotel_id AND ch.quarto_tipo = ac.tipo) 
+                WHERE ch.cotacao_id = %s""", conn, params=(int(inf['id']),))
             
-            # Cálculo de diárias para o PDF
+            # Ajuste de datas para o PDF
             d_i, d_o = pd.to_datetime(inf['checkin']), pd.to_datetime(inf['checkout'])
             itens['diarias'] = (d_o - d_i).days or 1
             
             st.dataframe(itens[["Hotel", "Quarto", "obs", "valor", "quantidade", "pedido", "sistema"]], use_container_width=True)
             
             st.divider()
-            st.subheader("📌 Vincular ao Pedido")
+            st.subheader("📌 Vincular Pedido")
             c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
             escolha = c_f1.selectbox("Quarto Escolhido", itens['Hotel'] + " - " + itens['Quarto'])
-            sistema, num_ped = c_f2.selectbox("Sistema", ["Reserve", "Argo", "Outro"]), c_f3.text_input("Nº Pedido")
+            sistema, ped = c_f2.selectbox("Sistema", ["Reserve", "Argo", "Outro"]), c_f3.text_input("Nº Pedido")
             
             if st.button("✅ Confirmar Vínculo", type="primary"):
-                if num_ped:
+                if ped:
                     idx = (itens['Hotel'] + " - " + itens['Quarto']).tolist().index(escolha)
                     cursor = conn.cursor()
-                    cursor.execute("UPDATE cotacao_hoteis SET pedido=%s, sistema=%s WHERE id=%s", (num_ped, sistema, int(itens.iloc[idx]['id'])))
+                    cursor.execute("UPDATE cotacao_hoteis SET pedido=%s, sistema=%s WHERE id=%s", (ped, sistema, int(itens.iloc[idx]['id'])))
                     conn.commit(); st.success("Pedido vinculado!"); st.rerun()
 
             c1, c2 = st.columns(2)
             pdf_bytes = gerar_pdf_cotacao(inf, itens)
             c1.download_button("📄 Baixar PDF", pdf_bytes, f"{sel}.pdf", use_container_width=True)
-            dest = c2.text_input("E-mail do Cliente:")
+            dest = c2.text_input("E-mail:")
             if c2.button("📧 Enviar por E-mail", use_container_width=True):
                 ok, msg = enviar_email_html(dest, sel, inf, itens)
                 st.success(msg) if ok else st.error(msg)
