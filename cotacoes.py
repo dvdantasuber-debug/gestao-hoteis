@@ -3,7 +3,6 @@ import pandas as pd
 import datetime
 import os
 import smtplib
-import ssl
 from email.message import EmailMessage
 from email.utils import make_msgid
 from database import init_db
@@ -13,7 +12,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- CORES E CONFIGURAÇÕES ---
+# --- CONFIGURAÇÕES VISUAIS ---
 AZUL_UNIGLOBE_RGB = (25, 45, 95)
 AZUL_UNIGLOBE_HEX = "#192d5f"
 AZUL_CLARO_HEX = "#E8EDF6"
@@ -21,7 +20,8 @@ AZUL_CLARO_HEX = "#E8EDF6"
 def gerar_identificador_unico(conn):
     hoje = datetime.date.today().strftime("%Y%m%d")
     cursor = conn.cursor()
-    cursor.execute("SELECT identificador FROM cotacoes WHERE identificador LIKE ? ORDER BY identificador DESC LIMIT 1", (f"COT-{hoje}-%",))
+    # No Postgres usamos %s
+    cursor.execute("SELECT identificador FROM cotacoes WHERE identificador LIKE %s ORDER BY identificador DESC LIMIT 1", (f"COT-{hoje}-%",))
     ultimo = cursor.fetchone()
     novo_num = int(ultimo[0].split('-')[-1]) + 1 if ultimo else 1
     return f"COT-{hoje}-{novo_num:03d}"
@@ -31,7 +31,9 @@ def gerar_pdf_cotacao(cotacao_info, itens_df):
     pdf.add_page()
     pdf.set_fill_color(*AZUL_UNIGLOBE_RGB)
     pdf.rect(0, 0, 210, 45, 'F')
-    if os.path.exists("logo.png"): pdf.image("logo.png", x=10, y=8, h=28)
+    if os.path.exists("logo.png"): 
+        pdf.image("logo.png", x=10, y=8, h=28)
+    
     pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 18)
     pdf.set_xy(110, 18)
@@ -40,8 +42,9 @@ def gerar_pdf_cotacao(cotacao_info, itens_df):
     pdf.set_x(110); pdf.cell(90, 5, f"ID: {cotacao_info['identificador']}", align='R', ln=True)
     
     pdf.set_xy(10, 55); pdf.set_text_color(30, 30, 30)
-    pdf.set_font("Helvetica", "B", 11); pdf.cell(0, 10, f"Evento: {cotacao_info['evento'].upper()}", ln=True)
+    pdf.set_font("Helvetica", "B", 11); pdf.cell(0, 10, f"Evento: {str(cotacao_info['evento']).upper()}", ln=True)
 
+    # Cabeçalho da Tabela no PDF
     w_hotel, w_val, w_qtd, w_sub = 105, 30, 15, 40
     pdf.set_fill_color(*AZUL_UNIGLOBE_RGB); pdf.set_text_color(255, 255, 255)
     pdf.set_font("Helvetica", "B", 9)
@@ -72,58 +75,57 @@ def gerar_pdf_cotacao(cotacao_info, itens_df):
     return bytes(pdf.output())
 
 def enviar_email_html(destinatario, cotacao_id, inf, itens_df):
-    USER = st.secrets["EMAIL_USER"]
-    PASS = st.secrets["EMAIL_PASS"]
-    HOST = st.secrets["EMAIL_HOST"]
-    PORT = int(st.secrets["EMAIL_PORT"])
-    image_cid = make_msgid()
+    try:
+        USER = st.secrets["EMAIL_USER"]
+        PASS = st.secrets["EMAIL_PASS"]
+        HOST = st.secrets["EMAIL_HOST"]
+        PORT = int(st.secrets["EMAIL_PORT"])
+        
+        total_proposta = 0
+        linhas_tabela = ""
+        for i, (_, row) in enumerate(itens_df.iterrows()):
+            cor_fundo = AZUL_CLARO_HEX if i % 2 == 0 else "#FFFFFF"
+            sub = row['valor'] * row['quantidade'] * row.get('diarias', 1)
+            total_proposta += sub
+            linhas_tabela += f"""
+            <tr style="background-color: {cor_fundo};">
+                <td style="padding: 10px;"><b>{row['Hotel']}</b><br>{row['Quarto']}</td>
+                <td style="text-align: center;">R$ {row['valor']:,.2f}</td>
+                <td style="text-align: center;">{row['quantidade']}</td>
+                <td style="text-align: right;">R$ {sub:,.2f}</td>
+            </tr>"""
 
-    total_proposta = 0
-    linhas_tabela = ""
-    for i, (_, row) in enumerate(itens_df.iterrows()):
-        cor_fundo = AZUL_CLARO_HEX if i % 2 == 0 else "#FFFFFF"
-        sub = row['valor'] * row['quantidade'] * row.get('diarias', 1)
-        total_proposta += sub
-        linhas_tabela += f"""
-        <tr style="background-color: {cor_fundo};">
-            <td style="padding: 12px; border-bottom: 1px solid #EEE;">
-                <b>{row['Hotel']}</b><br><small>{row['Quarto']}</small>
-            </td>
-            <td style="text-align: center;">R$ {row['valor']:,.2f}</td>
-            <td style="text-align: center;">{row['quantidade']}</td>
-            <td style="text-align: right; padding-right: 10px;">R$ {sub:,.2f}</td>
-        </tr>"""
-
-    corpo_html = f"""<html><body style="font-family: Arial;"><div style="max-width: 700px; margin: auto; border: 1px solid #ddd;">
-        <div style="background: {AZUL_UNIGLOBE_HEX}; color: white; padding: 20px; text-align: center;">
-            <h2>PROPOSTA DE HOSPEDAGEM</h2><small>ID: {cotacao_id}</small>
-        </div>
-        <div style="padding: 20px;">
-            <p>Olá, segue a cotação para o evento: <b>{inf['evento']}</b></p>
-            <table style="width: 100%; border-collapse: collapse;">
-                <thead style="background: {AZUL_UNIGLOBE_HEX}; color: white;">
-                    <tr><th style="padding: 10px; text-align: left;">Hotel</th><th>Diária</th><th>Qtd</th><th style="text-align: right;">Subtotal</th></tr>
-                </thead>
+        corpo = f"""
+        <html><body>
+            <div style="background:{AZUL_UNIGLOBE_HEX}; color:white; padding:20px;">
+                <h2>Proposta de Hospedagem - ID {cotacao_id}</h2>
+            </div>
+            <p>Evento: <b>{inf['evento']}</b></p>
+            <table width="100%" border="0" cellspacing="0" cellpadding="5">
+                <thead><tr style="background:#ddd;"><th>Item</th><th>Valor</th><th>Qtd</th><th>Subtotal</th></tr></thead>
                 <tbody>{linhas_tabela}</tbody>
             </table>
-            <h3 style="text-align: right; margin-top: 20px;">Total da Proposta: R$ {total_proposta:,.2f}</h3>
-        </div></div></body></html>"""
+            <h3 style="text-align:right;">Total: R$ {total_proposta:,.2f}</h3>
+        </body></html>"""
 
-    try:
         msg = EmailMessage()
-        msg['Subject'] = f"Proposta Uniglobe - {cotacao_id}"; msg['From'] = USER; msg['To'] = destinatario
-        msg.add_alternative(corpo_html, subtype='html')
-        server = smtplib.SMTP(HOST, PORT)
-        server.starttls()
-        server.login(USER, PASS)
-        server.send_message(msg)
-        server.quit()
-        return True, "E-mail enviado!"
-    except Exception as e: return False, str(e)
+        msg['Subject'] = f"Proposta Uniglobe - {cotacao_id}"
+        msg['From'] = USER
+        msg['To'] = destinatario
+        msg.add_alternative(corpo, subtype='html')
+
+        with smtplib.SMTP(HOST, PORT) as server:
+            server.starttls()
+            server.login(USER, PASS)
+            server.send_message(msg)
+        return True, "E-mail enviado com sucesso!"
+    except Exception as e:
+        return False, str(e)
 
 def exibir_pagina_cotacoes():
     st.title("💰 Gestão de Cotações e Pedidos")
     conn = init_db()
+    if not conn: return
     if 'carrinho' not in st.session_state: st.session_state.carrinho = []
 
     tab1, tab2 = st.tabs(["📝 Nova Cotação", "🔍 Pesquisar e Efetivar Pedidos"])
@@ -132,12 +134,12 @@ def exibir_pagina_cotacoes():
         identificador = gerar_identificador_unico(conn)
         with st.container(border=True):
             c1, c2, c3 = st.columns(3)
-            grupos = pd.read_sql_query("SELECT id, nome FROM grupos_economicos", conn)
+            grupos = pd.read_sql_query("SELECT id, nome FROM grupos_economicos ORDER BY nome", conn)
             g_sel = c1.selectbox("Grupo", [""] + grupos['nome'].tolist())
             empresas = [""]
             if g_sel:
                 g_id = grupos[grupos['nome'] == g_sel]['id'].values[0]
-                empresas += pd.read_sql_query("SELECT nome FROM empresas_clientes WHERE grupo_id=?", conn, params=(int(g_id),))['nome'].tolist()
+                empresas += pd.read_sql_query("SELECT nome FROM empresas_clientes WHERE grupo_id=%s", conn, params=(int(g_id),))['nome'].tolist()
             e_sel = c2.selectbox("Empresa", empresas)
             evento = c3.text_input("Evento")
             
@@ -145,21 +147,20 @@ def exibir_pagina_cotacoes():
             p_lista = get_countries()
             pais = l1.selectbox("País", p_lista, index=p_lista.index("Brazil") if "Brazil" in p_lista else 0)
             e_lista = get_states(pais)
-            est_idx = e_lista.index("Goiás") if "Goiás" in e_lista else 0
-            estado = l2.selectbox("Estado", e_lista, index=est_idx)
+            estado = l2.selectbox("Estado", e_lista, index=e_lista.index("Goiás") if "Goiás" in e_lista else 0)
             c_lista = get_cities(pais, estado)
-            cid_idx = c_lista.index("Goiânia") if "Goiânia" in c_lista else 0
-            cidade = l3.selectbox("Cidade", c_lista, index=cid_idx)
+            cidade = l3.selectbox("Cidade", c_lista, index=c_lista.index("Goiânia") if "Goiânia" in c_lista else 0)
             
             d1, d2 = st.columns(2)
             checkin = d1.date_input("Check-in", datetime.date.today())
             checkout = d2.date_input("Check-out", datetime.date.today() + datetime.timedelta(days=1))
             diarias = (checkout - checkin).days or 1
 
-        hoteis = pd.read_sql_query("SELECT * FROM hoteis WHERE cidade = ?", conn, params=(cidade,))
+        # Carrinho e Busca de Hotéis (Lógica Original)
+        hoteis = pd.read_sql_query("SELECT * FROM hoteis WHERE cidade = %s", conn, params=(cidade,))
         for _, h in hoteis.iterrows():
             with st.expander(f"🏨 {h['nome_comercial']}"):
-                quartos = pd.read_sql_query("SELECT * FROM acomodacoes WHERE hotel_id = ?", conn, params=(h['id'],))
+                quartos = pd.read_sql_query("SELECT * FROM acomodacoes WHERE hotel_id = %s", conn, params=(h['id'],))
                 for _, q in quartos.iterrows():
                     col1, col2, col3, col4 = st.columns([2,1,1,1])
                     col1.write(f"**{q['tipo']}**")
@@ -174,61 +175,13 @@ def exibir_pagina_cotacoes():
 
         if st.session_state.carrinho:
             st.divider()
-            st.subheader("🛒 Itens Selecionados")
             df_c = pd.DataFrame(st.session_state.carrinho)
-            df_c['Subtotal'] = df_c['valor'] * df_c['quantidade'] * df_c['diarias']
-            st.dataframe(df_c[["Hotel", "Quarto", "valor", "quantidade", "diarias", "Subtotal"]], use_container_width=True)
-            
-            if st.button("💾 Salvar Cotação", type="primary"):
+            st.dataframe(df_c[["Hotel", "Quarto", "valor", "quantidade", "diarias"]], use_container_width=True)
+            if st.button("💾 Salvar Cotação no Supabase", type="primary"):
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO cotacoes (identificador, grupo, empresa, evento, checkin, checkout, cidade, estado) VALUES (?,?,?,?,?,?,?,?)",
-                             (identificador, g_sel, e_sel, evento, str(checkin), str(checkout), cidade, estado))
-                c_id = cursor.lastrowid
-                for item in st.session_state.carrinho:
-                    cursor.execute("INSERT INTO cotacao_hoteis (cotacao_id, hotel_id, quarto_tipo, valor, quantidade) VALUES (?,?,?,?,?)",
-                                 (c_id, item['Hotel_ID'], item['Quarto'], item['valor'], item['quantidade']))
-                conn.commit(); st.session_state.carrinho = []; st.success("Salvo!"); st.rerun()
-
-    with tab2:
-        st.subheader("🔍 Pesquisar e Efetivar Pedidos")
-        busca = st.text_input("Buscar ID")
-        df_h = pd.read_sql_query("SELECT * FROM cotacoes WHERE identificador LIKE ?", conn, params=(f"%{busca}%",))
-        if not df_h.empty:
-            sel = st.selectbox("Selecione:", df_h['identificador'])
-            inf = df_h[df_h['identificador'] == sel].iloc[0]
-            itens = pd.read_sql_query("""
-                SELECT ch.id, h.nome_comercial as Hotel, ch.quarto_tipo as Quarto, ch.valor, ch.quantidade, ch.pedido, ch.sistema, ac.obs 
-                FROM cotacao_hoteis ch 
-                JOIN hoteis h ON ch.hotel_id = h.id 
-                LEFT JOIN acomodacoes ac ON (h.id = ac.hotel_id AND ch.quarto_tipo = ac.tipo) 
-                WHERE ch.cotacao_id = ?""", conn, params=(int(inf['id']),))
-            
-            st.dataframe(itens[["Hotel", "Quarto", "obs", "valor", "quantidade", "pedido", "sistema"]], use_container_width=True)
-            
-            st.divider()
-            st.subheader("🔗 Vincular ao Pedido do Sistema")
-            c_f1, c_f2, c_f3 = st.columns([2, 1, 1])
-            escolha = c_f1.selectbox("Quarto Escolhido", itens['Hotel'] + " - " + itens['Quarto'])
-            sistema = c_f2.selectbox("Sistema", ["Reserve", "Argo", "Outro"])
-            pedido = c_f3.text_input("Nº Pedido")
-            
-            if st.button("✅ Finalizar Pedido", type="primary"):
-                if pedido:
-                    idx_item = (itens['Hotel'] + " - " + itens['Quarto']).tolist().index(escolha)
-                    id_db = int(itens.iloc[idx_item]['id'])
-                    conn.execute("UPDATE cotacao_hoteis SET pedido=?, sistema=? WHERE id=?", (pedido, sistema, id_db))
-                    conn.commit()
-                    st.success("Vínculo realizado!"); st.rerun()
-
-            st.divider()
-            emp_info = pd.read_sql_query("SELECT email FROM empresas_clientes WHERE nome = ?", conn, params=(inf['empresa'],))
-            mail_sugerido = emp_info['email'].iloc[0] if not emp_info.empty else ""
-            c1, c2 = st.columns(2)
-            d_i, d_o = datetime.datetime.strptime(inf['checkin'], '%Y-%m-%d'), datetime.datetime.strptime(inf['checkout'], '%Y-%m-%d')
-            itens['diarias'] = (d_o - d_i).days or 1
-            pdf_bytes = gerar_pdf_cotacao(inf, itens)
-            c1.download_button("📄 Baixar PDF", pdf_bytes, f"{sel}.pdf", use_container_width=True)
-            dest = c2.text_input("E-mail:", value=mail_sugerido)
-            if c2.button("📧 Enviar por E-mail", use_container_width=True):
-                ok, msg = enviar_email_html(dest, sel, inf, itens)
-                st.success(msg) if ok else st.error(msg)
+                cursor.execute("""
+                    INSERT INTO cotacoes (identificador, grupo, empresa, evento, checkin, checkout, cidade, estado) 
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""", 
+                    (identificador, g_sel, e_sel, evento, checkin, checkout, cidade, estado))
+                c_id = cursor.fetchone()[0]
+                for item
